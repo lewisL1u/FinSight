@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finsight
+  namespace: finsight
+  labels:
+    app: finsight
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finsight
+  template:
+    metadata:
+      labels:
+        app: finsight
+    spec:
+      containers:
+        - name: finsight
+          image: your-registry/finsight:latest   # replace with your image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8501
+          envFrom:
+            - secretRef:
+                name: finsight-snowflake-secret
+            - configMapRef:
+                name: finsight-config
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"

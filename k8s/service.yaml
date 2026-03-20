@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: finsight
+  namespace: finsight
+  labels:
+    app: finsight
+spec:
+  type: ClusterIP
+  selector:
+    app: finsight
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8501
+      protocol: TCP
