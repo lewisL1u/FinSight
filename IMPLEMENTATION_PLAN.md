@@ -31,84 +31,100 @@ Step-by-step guide to set up, run, and deploy the FinSight Financial Document Q&
 
 ## Phase 2: Snowflake Setup
 
-### 2.1 Run Setup SQL
+### 2.1 Run Setup SQL ✅
 
-Log into Snowflake and execute the setup script:
+Log into Snowflake and run the canonical DDL:
 
 ```sql
--- In Snowflake UI (Worksheets) or SnowSQL CLI:
--- File: sql/setup.sql
+-- File: backend/sql/schema.sql
+CREATE TABLE IF NOT EXISTS DOCUMENTS (
+    chunk_id    VARCHAR         PRIMARY KEY,
+    company     VARCHAR         NOT NULL,
+    filing_date DATE            NOT NULL,
+    chunk_text  TEXT            NOT NULL,
+    embedding   VECTOR(FLOAT, 768),
+    created_at  TIMESTAMP       DEFAULT CURRENT_TIMESTAMP()
+);
 ```
 
-This provisions:
-- `FINSIGHT_DB` database and `FINSIGHT_SCHEMA` schema
-- `FINSIGHT_WH` warehouse (X-Small, auto-suspend 120s)
-- `DOCS_STAGE` internal stage for raw files
-- `DOCUMENT_CHUNKS` table with `VECTOR(FLOAT, 768)` embedding column
-- `FINSIGHT_SEARCH_SERVICE` Cortex Search Service (target lag: 1 minute)
+> The `snowflake_loader.py` also creates this table programmatically via `CREATE TABLE IF NOT EXISTS` — `schema.sql` is the authoritative source of truth.
 
 ### 2.2 Verify Setup
 
 ```sql
 USE DATABASE FINSIGHT_DB;
-USE SCHEMA FINSIGHT_SCHEMA;
+USE SCHEMA RAG;
 
-SHOW TABLES;                          -- Should show DOCUMENT_CHUNKS
-SHOW STAGES;                          -- Should show DOCS_STAGE
-SHOW CORTEX SEARCH SERVICES;          -- Should show FINSIGHT_SEARCH_SERVICE
+SHOW TABLES;           -- Should show DOCUMENTS
+SELECT COUNT(*) FROM DOCUMENTS;
 ```
 
 ---
 
-## Phase 3: Local Development Setup
+## Phase 3: Local Development Setup ✅
 
-### 3.1 Clone & Configure
+### 3.1 Folder Structure Created ✅
 
-```bash
-cd D:/projects/python/FinSight
-
-# Copy environment template
-cp .env.example .env
+```
+FinSight/
+├── backend/
+│   ├── ingestion/
+│   │   ├── sec_loader.py          ✅ SEC EDGAR fetch, parse, chunk
+│   │   └── snowflake_loader.py    ✅ Cortex embed + insert
+│   ├── sql/
+│   │   └── schema.sql             ✅ DOCUMENTS DDL
+│   ├── .env                       ✅ Snowflake credentials
+│   └── requirements.txt           ✅ Python deps
+├── frontend/                      🔲 TBD
+├── infra/                         🔲 TBD
+└── airflow/                       🔲 TBD
 ```
 
-Edit `.env` with your Snowflake credentials:
+### 3.2 Configure Environment ✅
+
+`backend/.env` is populated with:
 
 ```env
-SNOWFLAKE_ACCOUNT=xy12345.us-east-1
-SNOWFLAKE_USER=your_username
-SNOWFLAKE_PASSWORD=your_password
-SNOWFLAKE_ROLE=ACCOUNTADMIN
+SNOWFLAKE_ACCOUNT=...
+SNOWFLAKE_USER=...
+SNOWFLAKE_PASSWORD=...
 SNOWFLAKE_WAREHOUSE=FINSIGHT_WH
 SNOWFLAKE_DATABASE=FINSIGHT_DB
-SNOWFLAKE_SCHEMA=FINSIGHT_SCHEMA
+SNOWFLAKE_SCHEMA=RAG
 ```
 
-### 3.2 Install Dependencies
+### 3.3 Install Dependencies
 
 ```bash
-# Create virtual environment (recommended)
+cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
 pip install -r requirements.txt
 ```
 
-### 3.3 Run Locally
+### 3.4 Run SEC Ingestion
 
 ```bash
-streamlit run app/main.py
+# Fetch, chunk, embed, and store all 5 tickers in one shot
+cd backend
+python -c "
+from ingestion.sec_loader import load_sec_filings
+from ingestion.snowflake_loader import load_chunks
+load_chunks(load_sec_filings())
+"
 ```
 
-Open http://localhost:8501 in your browser.
+Or smoke-test the loader with synthetic data:
 
-### 3.4 Smoke Test
+```bash
+python ingestion/snowflake_loader.py
+```
 
-1. Navigate to **Upload Documents**
-2. Upload a small PDF or TXT financial document
-3. Wait for ingestion confirmation (chunk count shown)
-4. Navigate to **Ask Questions**
-5. Type: _"What are the key financial highlights?"_
-6. Verify an answer is returned with source citations
+### 3.5 Start FastAPI Backend (TBD)
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
 
 ---
 
@@ -321,14 +337,15 @@ argocd app sync finsight --force
 
 ## Project File Reference
 
-| File | Purpose |
-|---|---|
-| `sql/setup.sql` | Provision Snowflake objects |
-| `sql/teardown.sql` | Destroy all Snowflake objects |
-| `.env.example` | Environment variable template |
-| `requirements.txt` | Python dependencies |
-| `Dockerfile` | Container image definition |
-| `k8s/` | Raw Kubernetes manifests |
-| `helm/finsight/` | Helm chart for parameterized deployment |
-| `argocd/application.yaml` | ArgoCD GitOps Application manifest |
-| `ARCHITECTURE.md` | System architecture overview |
+| File | Purpose | Status |
+|---|---|---|
+| `backend/ingestion/sec_loader.py` | Fetch & chunk SEC 10-K filings for 5 tickers | ✅ Done |
+| `backend/ingestion/snowflake_loader.py` | Stage, embed via Cortex, insert into DOCUMENTS | ✅ Done |
+| `backend/sql/schema.sql` | Canonical DOCUMENTS table DDL | ✅ Done |
+| `backend/.env` | Snowflake connection credentials | ✅ Done |
+| `backend/requirements.txt` | Python dependencies | ✅ Done |
+| `backend/api/` | FastAPI Q&A endpoints | 🔲 TBD |
+| `frontend/` | Chat UI | 🔲 TBD |
+| `airflow/` | SEC ingestion DAG | 🔲 TBD |
+| `infra/` | Helm chart + ArgoCD manifests | 🔲 TBD |
+| `ARCHITECTURE.md` | System architecture overview | ✅ Updated |

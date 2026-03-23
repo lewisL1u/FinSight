@@ -3,154 +3,163 @@
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        USER (Browser)                           │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ HTTPS
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    KUBERNETES CLUSTER                           │
-│                                                                 │
-│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
-│  │   ArgoCD     │───▶│         finsight namespace          │   │
-│  │  (GitOps)    │    │                                     │   │
-│  │              │    │  ┌─────────────────────────────┐   │   │
-│  │  Watches Git │    │  │   Deployment: finsight       │   │   │
-│  │  repo, auto- │    │  │                             │   │   │
-│  │  syncs Helm  │    │  │  ┌───────────────────────┐  │   │   │
-│  │  chart       │    │  │  │  Streamlit App        │  │   │   │
-│  └──────────────┘    │  │  │  (Python 3.11)        │  │   │   │
-│                      │  │  │                       │  │   │   │
-│  ┌──────────────┐    │  │  │  • main.py (home)     │  │   │   │
-│  │  Helm Chart  │    │  │  │  • Upload page        │  │   │   │
-│  │  (values.yaml│    │  │  │  • Q&A chat page      │  │   │   │
-│  │   + templates│    │  │  └───────────┬───────────┘  │   │   │
-│  └──────────────┘    │  │              │               │   │   │
-│                      │  │  ┌───────────▼───────────┐  │   │   │
-│                      │  │  │  K8s Secret           │  │   │   │
-│                      │  │  │  (Snowflake creds)    │  │   │   │
-│                      │  │  └───────────────────────┘  │   │   │
-│                      │  │  ┌───────────────────────┐  │   │   │
-│                      │  │  │  ConfigMap            │  │   │   │
-│                      │  │  │  (warehouse, DB, etc) │  │   │   │
-│                      │  │  └───────────────────────┘  │   │   │
-│                      │  └─────────────────────────────┘   │   │
-│                      └─────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-                             │
-                             │ Snowpark (TLS)
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     SNOWFLAKE CLOUD                             │
-│                                                                 │
-│  FINSIGHT_DB / FINSIGHT_SCHEMA                                  │
-│                                                                 │
-│  ┌──────────────────┐   ┌──────────────────────────────────┐   │
-│  │   DOCS_STAGE     │   │      DOCUMENT_CHUNKS table       │   │
-│  │  (internal stage)│   │                                  │   │
-│  │                  │   │  chunk_id    VARCHAR  (PK)        │   │
-│  │  Raw PDF/TXT     │   │  source_file VARCHAR             │   │
-│  │  files stored    │   │  chunk_index INTEGER             │   │
-│  │  here            │   │  chunk_text  TEXT                │   │
-│  └──────────────────┘   │  chunk_embedding VECTOR(768)     │   │
-│                          └──────────────┬───────────────────┘   │
-│                                         │                       │
-│            ┌────────────────────────────┼──────────────────┐   │
-│            │                            │                   │   │
-│            ▼                            ▼                   │   │
-│  ┌──────────────────┐       ┌───────────────────────┐      │   │
-│  │  Cortex Search   │       │    Cortex LLM         │      │   │
-│  │  Service         │       │  CORTEX.COMPLETE()    │      │   │
-│  │                  │       │                       │      │   │
-│  │  Semantic search │       │  Model: mistral-large2│      │   │
-│  │  over chunk_text │       │  (or llama3.1-70b,    │      │   │
-│  │  Returns top-K   │       │   snowflake-arctic)   │      │   │
-│  │  relevant chunks │       │                       │      │   │
-│  └──────────────────┘       └───────────────────────┘      │   │
-│                                                             │   │
-│  ┌──────────────────────────────────────────────────────┐  │   │
-│  │  CORTEX.EMBED_TEXT_768('e5-base-v2', chunk_text)    │  │   │
-│  │  (called during ingestion to generate embeddings)   │  │   │
-│  └──────────────────────────────────────────────────────┘  │   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       SEC EDGAR (free API)                       │
+│  company_tickers.json  /submissions/CIK{n}.json  /Archives/...   │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │ HTTP (requests)
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                  AIRFLOW (orchestration)                         │
+│                                                                  │
+│  DAG: sec_ingestion_dag                                          │
+│    1. sec_loader.py   — fetch & chunk 10-K filings               │
+│       Tickers: AAPL, MSFT, GOOGL, JPM, GS                        │
+│       Output: [{company, filing_date, chunk_text, chunk_index}]  │
+│    2. snowflake_loader.py — stage + embed + insert               │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │ snowflake-connector-python (TLS)
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      SNOWFLAKE CLOUD                             │
+│  FINSIGHT_DB / RAG schema                                        │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                   DOCUMENTS table                        │    │
+│  │  chunk_id    VARCHAR  PRIMARY KEY  (company_date_index)  │    │
+│  │  company     VARCHAR                                     │    │
+│  │  filing_date DATE                                        │    │
+│  │  chunk_text  TEXT                                        │    │
+│  │  chunk_index INT                                         │    │
+│  │  embedding   VECTOR(FLOAT, 768)                          │    │
+│  │  created_at  TIMESTAMP                                   │    │
+│  └──────────────────────────┬──────────────────────────────┘    │
+│                             │                                    │
+│     ┌───────────────────────┼───────────────────────┐           │
+│     │                       │                       │           │
+│     ▼                       ▼                       ▼           │
+│  ┌──────────────┐  ┌─────────────────┐  ┌────────────────────┐ │
+│  │ Cortex Embed │  │  Cortex Search  │  │    Cortex LLM      │ │
+│  │ EMBED_TEXT   │  │  Service        │  │  CORTEX.COMPLETE() │ │
+│  │ _768(        │  │  Semantic       │  │                    │ │
+│  │ 'e5-base-v2',│  │  search over    │  │  mistral-large2    │ │
+│  │  chunk_text) │  │  chunk_text,    │  │  (or llama3.1-70b) │ │
+│  │ (at ingest)  │  │  returns top-K  │  │                    │ │
+│  └──────────────┘  └─────────────────┘  └────────────────────┘ │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │ REST / Snowpark (TLS)
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                   BACKEND (FastAPI + uvicorn)                    │
+│  backend/                                                        │
+│  ├── ingestion/                                                  │
+│  │   ├── sec_loader.py        — EDGAR fetch, parse, chunk        │
+│  │   └── snowflake_loader.py  — stage, Cortex embed, insert      │
+│  ├── sql/schema.sql           — canonical DDL                    │
+│  ├── .env                     — Snowflake credentials            │
+│  └── requirements.txt                                            │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │ HTTP/JSON
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        FRONTEND                                  │
+│  frontend/                   — Q&A chat UI (TBD)                 │
+└──────────────────────────────────────────────────────────────────┘
+                               │
+┌──────────────────────────────────────────────────────────────────┐
+│                  KUBERNETES CLUSTER                              │
+│                                                                  │
+│  ┌──────────────┐   ┌──────────────────────────────────────┐    │
+│  │   ArgoCD     │──▶│  finsight namespace                  │    │
+│  │  (GitOps)    │   │  Deployment · Service · Secret       │    │
+│  └──────────────┘   │  ConfigMap · Ingress                 │    │
+│  ┌──────────────┐   └──────────────────────────────────────┘    │
+│  │  Helm Chart  │                                                │
+│  │  infra/      │                                                │
+│  └──────────────┘                                                │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Data Flow
 
-### Document Ingestion Flow
+### SEC Ingestion Flow
 
 ```
-User uploads PDF/TXT
+Airflow DAG (or python sec_loader.py)
         │
         ▼
-[Streamlit: Upload page]
-        │  file bytes
-        ▼
-[document_processor.py]
-  ├── extract_text()       ← pypdf / plain text decode
-  ├── chunk_text()         ← 500-word windows, 50-word overlap
-  └── INSERT into DOCUMENT_CHUNKS (chunk_id, source_file, chunk_index, chunk_text)
+[sec_loader.py]
+  ├── get_cik(ticker)            ← SEC company_tickers.json
+  ├── get_latest_10k(cik)        ← /submissions/CIK{n}.json
+  ├── fetch_filing_text(...)     ← /Archives/... (HTML → BeautifulSoup → plain text)
+  └── chunk_text(text)           ← 400-word windows, 50-word overlap
+  → List[{company, filing_date, chunk_text, chunk_index}]
         │
         ▼
-[Snowflake SQL]
-  UPDATE DOCUMENT_CHUNKS
-  SET chunk_embedding = CORTEX.EMBED_TEXT_768('e5-base-v2', chunk_text)
-  WHERE chunk_embedding IS NULL
+[snowflake_loader.py]
+  ├── CREATE TABLE IF NOT EXISTS DOCUMENTS (... embedding VECTOR(FLOAT, 768))
+  ├── CREATE TEMPORARY TABLE DOCUMENTS_STAGING
+  ├── executemany → bulk insert raw chunks into staging
+  └── INSERT INTO DOCUMENTS                         ← single SQL round-trip
+        SELECT ...,
+               SNOWFLAKE.CORTEX.EMBED_TEXT_768('e5-base-v2', chunk_text)
+        FROM DOCUMENTS_STAGING
 ```
 
 ### Q&A (RAG) Flow
 
 ```
-User types question
+User types question  (Frontend)
         │
         ▼
-[Streamlit: Q&A page]
+[FastAPI backend]
         │
         ▼
-[cortex_search.py]
-  CORTEX.SEARCH_PREVIEW(service, query, top_k)
-  → returns top-K chunks with source citations
+  CORTEX.SEARCH / vector similarity query
+  → returns top-K chunks (company, filing_date, chunk_text)
         │
         ▼
-[cortex_llm.py]
   Build RAG prompt:
-    SYSTEM:  "You are FinSight..."
-    CONTEXT: [chunk 1] [chunk 2] ... [chunk K]
+    SYSTEM:   "You are FinSight, a financial analyst assistant..."
+    CONTEXT:  [chunk 1] [chunk 2] ... [chunk K]
     QUESTION: user's question
         │
         ▼
-  CORTEX.COMPLETE('mistral-large2', prompt)
+  SNOWFLAKE.CORTEX.COMPLETE('mistral-large2', prompt)
   → returns answer text
         │
         ▼
-[Streamlit: displays answer + expandable source chunks]
+  JSON response → Frontend displays answer + source citations
 ```
 
 ---
 
 ## Component Responsibilities
 
-| Component | Technology | Responsibility |
-|---|---|---|
-| `app/main.py` | Streamlit | App home, navigation |
-| `app/pages/1_Upload_Documents.py` | Streamlit | File upload UI, ingestion trigger |
-| `app/pages/2_Ask_Questions.py` | Streamlit | Chat UI, answer display |
-| `app/services/snowflake_client.py` | Snowpark | Cached DB session |
-| `app/services/document_processor.py` | Python + SQL | Parse, chunk, embed, store |
-| `app/services/cortex_search.py` | Cortex Search | Semantic retrieval |
-| `app/services/cortex_llm.py` | Cortex LLM | RAG prompt + answer generation |
-| `sql/setup.sql` | Snowflake SQL | Provision all Snowflake objects |
-| `helm/finsight/` | Helm | Templated K8s deployment |
-| `argocd/application.yaml` | ArgoCD | GitOps sync from repo → cluster |
+| Component | Technology | Responsibility | Status |
+|---|---|---|---|
+| `backend/ingestion/sec_loader.py` | Python, requests, BS4 | Fetch 10-K filings from SEC EDGAR, parse HTML, chunk text | ✅ Done |
+| `backend/ingestion/snowflake_loader.py` | snowflake-connector, Cortex | Stage chunks, embed via Cortex, insert into DOCUMENTS | ✅ Done |
+| `backend/sql/schema.sql` | Snowflake SQL | Canonical DDL for DOCUMENTS table | ✅ Done |
+| `backend/.env` | dotenv | Snowflake connection credentials | ✅ Done |
+| `backend/requirements.txt` | pip | Python dependencies | ✅ Done |
+| `airflow/` | Apache Airflow | Orchestrate SEC ingestion DAG | 🔲 TBD |
+| `backend/api/` | FastAPI + uvicorn | REST endpoints for search and Q&A | 🔲 TBD |
+| `frontend/` | TBD | Q&A chat UI | 🔲 TBD |
+| `infra/` | Helm + ArgoCD | K8s deployment manifests, GitOps | 🔲 TBD |
 
 ---
 
 ## Key Design Decisions
 
-- **No external vector DB** — Cortex Search Service manages indexing natively inside Snowflake
+- **SEC EDGAR as data source** — free public API, no data licensing cost; pulls latest 10-K for AAPL, MSFT, GOOGL, JPM, GS
+- **No external vector DB** — `VECTOR(FLOAT, 768)` column in Snowflake; Cortex Search indexes it natively
 - **No LangChain** — direct SQL calls to Cortex keep dependencies minimal and latency low
-- **Snowpark session cached** via `@st.cache_resource` — single connection reused across all user interactions
+- **Cortex embedding in SQL** — `SNOWFLAKE.CORTEX.EMBED_TEXT_768('e5-base-v2', chunk_text)` runs server-side in one INSERT…SELECT; no Python ML inference
+- **chunk_id as `{company}_{filing_date}_{chunk_index}`** — deterministic, human-readable PK; safe to re-run ingestion (upsert-friendly)
+- **400-word chunks, 50-word overlap** — balances context richness against Cortex token limits
+- **Airflow for orchestration** — scheduled re-ingestion when new filings are published
 - **ArgoCD + Helm** — full GitOps: push to `main` → ArgoCD auto-syncs → cluster updates
-- **Secrets separated** — Snowflake credentials live in K8s Secrets, never in ConfigMaps or the Helm chart
+- **Secrets separated** — Snowflake credentials live in K8s Secrets / `.env`, never in ConfigMaps or the Helm chart

@@ -1,0 +1,9 @@
+snowflake-connector-python
+snowflake-snowpark-python
+rank-bm25
+sentence-transformers
+fastapi
+uvicorn
+python-dotenv
+requests
+beautifulsoup4
