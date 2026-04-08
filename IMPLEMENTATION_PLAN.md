@@ -71,6 +71,10 @@ FinSight/
 │   ├── ingestion/
 │   │   ├── sec_loader.py          ✅ SEC EDGAR fetch, parse, chunk
 │   │   └── snowflake_loader.py    ✅ Cortex embed + insert
+│   ├── rag/
+│   │   ├── retriever.py           ✅ Hybrid BM25 + vector search, RRF merge → top 10
+│   │   ├── reranker.py            ✅ Cross-encoder re-ranking → top 5
+│   │   └── generator.py           ✅ Prompt assembly + CORTEX.COMPLETE → {answer, sources}
 │   ├── sql/
 │   │   └── schema.sql             ✅ DOCUMENTS DDL
 │   ├── .env                       ✅ Snowflake credentials
@@ -344,6 +348,9 @@ argocd app sync finsight --force
 | `backend/sql/schema.sql` | Canonical DOCUMENTS table DDL | ✅ Done |
 | `backend/.env` | Snowflake connection credentials | ✅ Done |
 | `backend/requirements.txt` | Python dependencies | ✅ Done |
+| `backend/rag/retriever.py` | Hybrid BM25 + vector search, RRF merge → top 10 candidates | ✅ Done |
+| `backend/rag/reranker.py` | Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2) → top 5 | ✅ Done |
+| `backend/rag/generator.py` | Prompt assembly + `CORTEX.COMPLETE('mistral-7b')` → `{answer, sources}` | ✅ Done |
 | `backend/api/` | FastAPI Q&A endpoints | 🔲 TBD |
 | `frontend/` | Chat UI | 🔲 TBD |
 | `airflow/` | SEC ingestion DAG | 🔲 TBD |

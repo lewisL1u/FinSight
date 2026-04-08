@@ -117,21 +117,30 @@ User types question  (Frontend)
 [FastAPI backend]
         │
         ▼
-  CORTEX.SEARCH / vector similarity query
-  → returns top-K chunks (company, filing_date, chunk_text)
+[retriever.py]  — Hybrid retrieval (top 20 candidates each)
+  ├── Path 1: VECTOR_COSINE_SIMILARITY  (Snowflake Cortex)
+  └── Path 2: BM25Okapi                (rank-bm25, full corpus)
+        │
+        ▼ RRF merge → top 10
         │
         ▼
-  Build RAG prompt:
-    SYSTEM:   "You are FinSight, a financial analyst assistant..."
-    CONTEXT:  [chunk 1] [chunk 2] ... [chunk K]
-    QUESTION: user's question
+[reranker.py]  — Cross-encoder re-ranking
+  └── CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+      scores every (query, chunk) pair → top 5
         │
         ▼
-  SNOWFLAKE.CORTEX.COMPLETE('mistral-large2', prompt)
-  → returns answer text
+[generator.py]  — Prompt assembly + Cortex LLM
+  ├── Build prompt:
+  │     SYSTEM:   "You are FinSight, a financial analyst assistant..."
+  │     CONTEXT:  [chunk 1] [chunk 2] ... [chunk 5]  (company + filing_date labelled)
+  │     QUESTION: user's question
+  └── SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-7b', prompt)
         │
         ▼
-  JSON response → Frontend displays answer + source citations
+  {answer, sources, model}  →  JSON response
+        │
+        ▼
+  Frontend displays answer + source citations
 ```
 
 ---
@@ -143,6 +152,9 @@ User types question  (Frontend)
 | `backend/ingestion/sec_loader.py` | Python, requests, BS4 | Fetch 10-K filings from SEC EDGAR, parse HTML, chunk text | ✅ Done |
 | `backend/ingestion/snowflake_loader.py` | snowflake-connector, Cortex | Stage chunks, embed via Cortex, insert into DOCUMENTS | ✅ Done |
 | `backend/sql/schema.sql` | Snowflake SQL | Canonical DDL for DOCUMENTS table | ✅ Done |
+| `backend/rag/retriever.py` | rank-bm25, Snowflake Cortex | Hybrid BM25 + vector search, RRF merge → top 10 | ✅ Done |
+| `backend/rag/reranker.py` | sentence-transformers CrossEncoder | Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2) → top 5 | ✅ Done |
+| `backend/rag/generator.py` | snowflake-connector, Cortex | Prompt assembly + CORTEX.COMPLETE('mistral-7b') → {answer, sources} | ✅ Done |
 | `backend/.env` | dotenv | Snowflake connection credentials | ✅ Done |
 | `backend/requirements.txt` | pip | Python dependencies | ✅ Done |
 | `airflow/` | Apache Airflow | Orchestrate SEC ingestion DAG | 🔲 TBD |

@@ -9,7 +9,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/your-org/FinSight.git   # replace with your repo
+    repoURL: https://github.com/lewis.liu/FinSight.git   # replace with your repo
     targetRevision: main
     path: helm/finsight
     helm:
