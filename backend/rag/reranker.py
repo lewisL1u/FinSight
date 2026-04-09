@@ -1,10 +1,10 @@
 from sentence_transformers import CrossEncoder
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 TOP_N = 5
 
-_model: CrossEncoder | None = None
+_model: Optional[CrossEncoder] = None
 
 
 def _get_model() -> CrossEncoder:
