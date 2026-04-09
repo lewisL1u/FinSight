@@ -9,6 +9,7 @@ load_dotenv()
 TOP_K = 20   # candidates per retrieval path
 RRF_K = 60   # RRF constant (standard default)
 FINAL_K = 10  # merged results returned to caller
+BM25_CANDIDATE_LIMIT = 2000 # cap rows pulled for BM25 scoring
 
 
 # ── Snowflake connection ──────────────────────────────────────────────────────
@@ -66,8 +67,22 @@ FROM DOCUMENTS
 
 
 def _bm25_search(cur, query: str) -> List[Dict]:
-    cur.execute(FETCH_ALL_SQL)
+    terms = query.lower().split()
+
+    # Pre-filter: fetch only chunks that contain at least one query term.
+    # This avoids pulling the entire corpus into memory on every call.
+    ilike_clauses = " OR ".join(["LOWER(chunk_text) LIKE %s"] * len(terms))
+    sql = f"""
+        SELECT chunk_id, company, filing_date, chunk_text
+        FROM DOCUMENTS
+        WHERE {ilike_clauses}
+        LIMIT {BM25_CANDIDATE_LIMIT}
+    """
+    cur.execute(sql, [f"%{t}%" for t in terms])
     rows = cur.fetchall()
+
+    if not rows:
+        return []
 
     corpus = [r[3].lower().split() for r in rows]
     bm25 = BM25Okapi(corpus)

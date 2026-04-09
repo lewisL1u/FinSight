@@ -7,7 +7,7 @@ HEADERS = {"User-Agent": "FinSight research@finsight.com"}
 
 TICKERS = ["AAPL", "MSFT", "GOOGL", "JPM", "GS"]
 
-CHUNK_SIZE = 400   # words (proxy for tokens)
+CHUNK_SIZE = 500   # words (proxy for tokens)
 CHUNK_OVERLAP = 50
 
 
